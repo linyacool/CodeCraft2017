@@ -1,0 +1,2 @@
+bash build.sh
+./bin/cdn l1.txt  result.txt

@@ -1,0 +1,508 @@
+#include "deploy.h"
+#include <stdio.h>
+#include <vector>
+#include <string.h>
+#include <iostream>
+#include <queue>
+#include <string>
+#include <set>
+#include <functional>
+#include <time.h>
+#include <unordered_map>
+#include <algorithm>
+#include <math.h>
+using namespace std;
+#define MAX_EDGE_NUM    (2000 * 20)
+
+typedef unsigned int uint;
+const int MAXPOINT = 1001;
+const int MAXCON = 501;
+const int GENENUM = 1000;
+const int INTMAX = 2147483645;
+const int LOOP=10000;
+const int MAXEDGE=50001;
+const int TIME = 88;
+
+time_t start, endt;
+
+int output[MAXEDGE][MAXPOINT];
+int tempEdge[MAXEDGE][3];
+int minBandwidth[MAXEDGE];
+int last[MAXEDGE]={0};
+int serverCode[MAXPOINT];
+int serverNum=0;
+char topo_file[50000]={0};
+int outputLength=0;
+
+vector<int> mustBeTrue;
+int numOfCandidateBFS = 1;
+vector<set<int> > candidate;
+
+const int JUDGENUM = 0;
+
+struct bw
+{
+    int ID;
+    int bandwidth = 0;
+};
+bw bandwidthSum[MAXPOINT];
+int bandwidth[MAXPOINT];
+//带宽，费用
+struct Node
+{
+	Node() = default;
+	~Node() = default;
+	int ID = 0;
+	//记录与之相邻的节点
+	vector<Node *> next;
+	bool isConsume = false;
+	bool isServer = false;
+};
+struct Flow
+{
+	Flow() = default;
+	~Flow() = default;
+	int bandwidth = 0;
+	int fee = -1;
+};
+//消费节点
+struct ConNode
+{
+	ConNode() = default;
+	~ConNode() = default;
+	int ID = 0;
+	int connectID = 0;
+	int need = 0;
+};
+Flow flow[MAXPOINT][MAXPOINT];
+Node net[MAXPOINT];
+ConNode connode[MAXCON];
+
+unordered_map<string, int> GeneHash;
+set<int> candidate_set;
+int _num = 0;
+//服务器成本
+int sercer_fee = 0;
+
+int netCodeNum = 0; //网络节点数量
+int chainNum = 0;	//网络链路数量
+int consumeNum = 0;  //消费节点数量
+
+uint SumOfNeed = 0;
+
+bool gene[GENENUM][MAXPOINT];
+
+int conn[MAXPOINT];
+
+Mcmf my;
+Mcmf temp;
+//当前最好的路线选择
+Mcmf best;
+
+double mutation_pro[MAXPOINT] ;
+
+bool comp(const ConNode &a, const ConNode &b)
+{
+    return a.need > b.need;
+}
+bool compbw(const bw &a, const bw &b)
+{
+    return a.bandwidth > b.bandwidth;
+}
+string gene2string(bool(&g)[MAXPOINT])
+{
+	string str;
+	for (int i = 0; i < 20; ++i)
+	{
+		str.push_back(g[i]);
+	}
+	return str;
+}
+
+bool c_best[MAXPOINT];				//迄今为止最好的一条基因
+									//种群进化
+int straight = consumeNum/3;
+
+int cost[GENENUM];					//每条基因代价
+double pro[GENENUM];				//每条基因的累积概率
+int c_min = INTMAX;					//迄今为止最小的代价
+int c_max = 0;						//某次进化中最大代价（将会被迄今为止最优的基因覆盖）
+bool newgene[GENENUM][MAXPOINT];
+
+int falsetime=0;
+
+//当前最少费用值
+int mincost = INTMAX;
+
+//评估函数
+int assess(bool(&g)[MAXPOINT])
+{
+	temp = my;
+	int servernum = 0;
+	//netCodeNum + 1 表示消费节点出发
+	int consumeFirst = netCodeNum + 1;
+	for (int i = 0; i < netCodeNum; ++i)
+	{
+		if (g[i])
+		{
+			++servernum;
+			flow[consumeFirst][i].bandwidth = -1;
+			flow[consumeFirst][i].fee = 0;
+
+			temp.set_edge(0, i + 1, INT_MAX, 0);
+		}
+	}
+	if (servernum == 0) return 0;
+	if (servernum>consumeNum)  return -2;
+
+	int flow_cost = 0;
+	int max_flow = temp.run_edmonds(netCodeNum + 2, 0, consumeFirst, flow_cost); 
+	int ans = flow_cost + servernum * sercer_fee;
+	if (max_flow != SumOfNeed)
+	{
+		return -1;
+	}
+	if (ans < mincost)
+	{
+		best = temp;
+		mincost = ans;
+		cout << "flow_cost==" << mincost << endl;
+	}
+	return ans;
+}
+
+bool canFeed(bool(&g)[MAXPOINT])
+{
+    int i,sum = 0;
+    for (i = 0; i < netCodeNum; ++i)
+    {
+        if(g[i])
+            sum += bandwidth[i];
+    }
+    if(sum >= SumOfNeed)
+        return true;
+    return false;
+}
+
+
+int gene_num = 0;
+string work()
+{
+	
+	int best_i = 0;
+	bool cc[MAXPOINT] = {false};
+	memcpy(cc,c_best,sizeof(cc));
+	//mincost=assess(cc);
+	//printf("mincost == %d \n",mincost);
+	while(true)
+	{
+		endt =time(NULL);
+		if(endt-start>TIME)
+		{
+			best.sendconn(conn);
+			return best.printresult();
+		}
+		for(int i = best_i;i < netCodeNum; ++i)
+		{
+			if(i==netCodeNum-1)
+				i=0;
+			endt =time(NULL);
+			if(endt-start> TIME)
+			{
+				best.sendconn(conn);
+				return best.printresult();
+			}
+			memcpy(cc,c_best,sizeof(cc));
+			if(candidate_set.find(i) != candidate_set.end())
+			{
+				cc[i] = !cc[i];
+			}/*
+			cc[i]=!cc[i];
+			int change=i;
+			while(change==i)
+				change=rand()%candidate[i].size();
+			cc[change]=!cc[change];*/
+			int cost = assess(cc);
+			//printf("i == %d \n",i);
+			if(cost < c_min &&cost != -1 && cost != -2 )
+			{	
+				//printf("c_min******* == %d \n",c_min);
+				c_min = cost;
+				best_i=i;
+				memcpy(c_best,cc,sizeof(cc));
+				break;
+			}
+		}
+
+	}
+	
+	printf("\n mincost == %d \n",mincost);
+
+}
+
+
+void toChar(char s[][MAX_EDGE_NUM], char *line) {
+	int j = 0, k = 0;
+	int index = 0;
+	while (line[j] != '\0') {
+		if (line[j] == ' ') {
+			s[index][k] = '\0';
+			k = 0;
+			j++;
+			index++;
+		}
+		s[index][k] = line[j];
+		k++;
+		j++;
+	}
+	s[index][k] = '\0';
+}
+
+void find_candidate()
+{
+    //point which must set true
+    for (int i = 0; i < consumeNum; ++i)
+    {
+        if(net[connode[i].connectID].next.size() == 1)
+        {
+            if(connode[i].need > flow[connode[i].connectID][net[connode[i].connectID].next[0]->ID].bandwidth)
+            {
+                //mustBeTrue.push_back(net[connode[i].connectID].next[0]->ID);
+                candidate_set.insert(net[connode[i].connectID].next[0]->ID);
+            }
+        }
+    }
+
+    sort(bandwidthSum, bandwidthSum + netCodeNum, compbw);
+
+
+    //consumers which need much. 1/4 consumers.
+    for (int i = 0; i < netCodeNum / 4; ++i)
+    {
+        candidate_set.insert(connode[i].connectID);
+	cout<<"bandwidthSum[i].ID"<<bandwidthSum[i].ID<<endl;
+        candidate_set.insert(bandwidthSum[i].ID);
+    }
+
+    int flag[MAXPOINT];
+    memset(flag, 0, sizeof(flag));
+    for (const auto &i : candidate)
+    {
+        for(const auto &j : i)
+        {
+            ++flag[j];
+        }
+    }
+    int kk=0;
+    for(int i = 0; i < netCodeNum; ++i)
+    {
+        if(flag[i] > 20)
+        {
+            ++kk;
+            candidate_set.insert(i);
+        }
+    }
+    cout << "kk=" << kk << endl;
+    cout << "size=" << candidate_set.size() << endl;
+
+}
+
+void deploy_server(char * topo[MAX_EDGE_NUM], int line_num, char * filename)
+{
+    start = time(NULL);
+	memset(bandwidth, 0, sizeof(bandwidth));
+	char s[4][MAX_EDGE_NUM] = { " " };
+	toChar(s, topo[0]);
+	sscanf(s[0],"%d",&netCodeNum);// = charToInt(s[0]); //网络节点数量
+	sscanf(s[1],"%d",&chainNum);//chainNum = charToInt(s[1]);	//网络链路数量
+	sscanf(s[2],"%d",&consumeNum);//consumeNum = charToInt(s[2]);	//消费节点数量
+	Mcmf mymy(netCodeNum + 2);
+	char *temp = topo[2];
+	int serverCost = 0;
+	sscanf(temp,"%d",&serverCost);//charToInt(temp); //服务器部署成本
+	sercer_fee = serverCost;
+	for (int j = 0; j < netCodeNum; j++) {
+		net[j].ID = j;
+		net[j].isServer = true;
+	}
+	int k = 4;
+	for (; k < 4 + chainNum; k++) {
+		toChar(s, topo[k]);
+		int startCode = 0;
+		sscanf(s[0],"%d",&startCode);//charToInt(s[0]);
+		int endCode =0;
+		sscanf(s[1],"%d",&endCode);//charToInt(s[1]);
+		int bwidth = 0;
+		sscanf(s[2],"%d",&bwidth);//charToInt(s[2]);
+		int netPerCost =0;
+		sscanf(s[3],"%d",&netPerCost);//charToInt(s[3]);
+		net[startCode].next.push_back(&net[endCode]);
+		net[endCode].next.push_back(&net[startCode]);
+		flow[endCode][startCode].bandwidth = bwidth;
+		flow[endCode][startCode].fee = netPerCost;
+		flow[startCode][endCode].bandwidth = bwidth;
+		flow[startCode][endCode].fee = netPerCost;
+		bandwidthSum[startCode].bandwidth += bwidth;
+		bandwidthSum[startCode].ID=startCode;
+		bandwidthSum[endCode].bandwidth += bwidth;
+		bandwidthSum[endCode].ID=startCode;
+		bandwidth[startCode] = bandwidthSum[startCode].bandwidth;
+		bandwidth[endCode] = bandwidthSum[endCode].bandwidth;	
+		mymy.set_edge(startCode + 1, endCode + 1, bwidth, netPerCost);
+		mymy.set_edge(endCode + 1, startCode + 1, bwidth, netPerCost);
+	}
+	k++;
+	for (int i = 0; k <line_num; k++, i++) {
+		toChar(s, topo[k]);
+		int consumeID = 0;
+		sscanf(s[0],"%d",&consumeID);//charToInt(s[0]);
+		int connectID = 0;//
+		sscanf(s[1],"%d",&connectID);//charToInt(s[1]);
+		int bandNeed = 0;
+		sscanf(s[2],"%d",&bandNeed);//charToInt(s[2]);      
+        conn[connectID + 1] = consumeID;
+		connode[i].ID = i;
+		connode[i].connectID = connectID;
+		connode[i].need = bandNeed;
+		//总需求
+		SumOfNeed += bandNeed;
+	}
+	//总汇点
+	for (int i = 0; i < consumeNum; ++i)
+	{
+		flow[connode[i].connectID][consumeNum].bandwidth = connode[i].need;
+		flow[connode[i].connectID][consumeNum].fee = 0;
+	}
+	//总汇点1 最小费用最大流模板    netCodeNum + 1为总汇点
+	for (int i = 0; i < consumeNum; ++i)
+	{
+		mymy.set_edge(connode[i].connectID + 1, netCodeNum + 1, connode[i].need, 0);
+	}
+	my = mymy;
+  
+    for (int i = 0; i < consumeNum; ++i)
+    {
+        if(net[connode[i].connectID].next.size() == 1)
+        {
+            if(connode[i].need > flow[connode[i].connectID][net[connode[i].connectID].next[0]->ID].bandwidth)
+            {
+                mustBeTrue.push_back(net[connode[i].connectID].next[0]->ID);
+            }
+        }
+    }
+
+  
+    sort(connode, connode + consumeNum, comp);
+    _num = consumeNum * 7 / 8;
+    int p = consumeNum - 1;
+    while(connode[p].need < 15) --p;
+    _num = p;
+
+    //bool gg[MAXPOINT] = {false};
+    
+if(netCodeNum > JUDGENUM)
+{
+bool loc_best[MAXPOINT];
+	int ccmin;
+	memset(loc_best,false,sizeof(loc_best));
+	for(int i = 0; i <= _num; ++i)
+    {
+	loc_best[connode[i].connectID] = true;
+    }
+	
+    ccmin = assess(loc_best);
+	c_min=ccmin;
+	printf("................c_min == %d\n",c_min);
+	while(ccmin > 0)
+	{
+		loc_best[connode[_num].connectID] = false;
+		--_num;
+		ccmin = assess(loc_best);
+		if(ccmin<c_min&&ccmin>0)
+		{
+			c_min=ccmin;
+			memcpy(c_best,loc_best,sizeof(c_best));
+		}
+		
+	}
+
+    /*while(ccmin <= 0)
+    {
+        ++_num;
+        loc_best[connode[_num].connectID] = true;
+	ccmin = assess(loc_best);
+    }*/
+	cout<<"c_min"<<c_min<<endl;
+}
+	
+    cout << "num=" << _num << endl;
+    set<int> temp_set;
+    queue<int> qq;
+    int node = 0;
+    /*
+    for (int i = 0; i < 5; ++i)
+    {
+        cout << "size = " << net[i].next.size() << endl;
+        for (int j = 0; j < net[i].next.size(); ++j)
+        {
+            cout << "ID=" << net[i].next[j]->ID << " ";
+        }            
+        cout << endl;
+    }
+    */
+    for (int i = 0; i <= netCodeNum; ++i)
+    {
+        qq.push(net[i].ID);
+        //cout << "i:" << connode[i].connectID <<endl;
+        for(int j = 0; j < numOfCandidateBFS; ++j)
+        {
+            int nn = qq.size();
+	//cout<<"nn*****:"<<nn<<" ";
+            while(!qq.empty() && nn--)
+            {	
+		//cout<<"nn&&&&&:"<<nn<<" ";
+                node = qq.front();
+		//cout<<"qq.front&&&&:"<<qq.front()<<" ";
+		//cout<<"qq.size&&&:"<<qq.size()<<endl;
+                temp_set.insert(node);
+                qq.pop();
+                for(int k = 0; k < net[node].next.size(); ++k)
+                {
+                    if(temp_set.find(net[node].next[k]->ID) == temp_set.end())
+                    {
+                        qq.push(net[node].next[k]->ID);
+                        //cout << "ID=" << net[node].next[k]->ID << " ";
+                        temp_set.insert(net[node].next[k]->ID);
+			//cout<<"qq.size:"<<qq.size()<<endl;
+			
+                    }
+                }                  
+            }
+        }
+	while(!qq.empty())
+	{
+		qq.pop();
+	}
+        //cout << "temp_size=" << temp_set.size() << endl;
+        candidate.push_back(temp_set);
+        temp_set.clear();
+    }
+    //cout << candidate.size() << endl;
+/*
+    for (auto &i : candidate)
+    {
+        cout << i.size() << endl;
+	for(auto j : i)
+	{
+		cout<<j<<" ";
+
+	}
+	cout<<endl;
+    }
+*/
+    find_candidate();
+	//work();
+	string res = work();
+	char *topo_file = (char*)res.c_str();
+	write_result(topo_file, filename);
+}
